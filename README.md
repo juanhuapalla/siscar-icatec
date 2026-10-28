@@ -10,22 +10,13 @@ Aplicación de una sola página (`index.html`) para llevar la trazabilidad de la
 - Cadena de trazabilidad carta → respuesta.
 
 ## Arquitectura
-- `public/index.html`: la aplicación (Cloudflare Pages).
-- `functions/api/[[path]].js`: API (Pages Functions) sobre Cloudflare D1.
+- `public/index.html`: la aplicación.
+- `src/worker.js`: Cloudflare Worker que sirve la página y la API sobre D1.
 - `schema.sql`: tablas de D1.
 
-## Despliegue en Cloudflare
-Requiere Node.js y una cuenta de Cloudflare.
+## Despliegue
+El Worker está conectado a este repo en Cloudflare: cada push a `main` se despliega solo (`npx wrangler deploy`).
 
-```bash
-npm i -g wrangler
-wrangler login
-wrangler d1 create siscar-icatec          # copia el database_id que muestra
-# pega ese id en wrangler.toml (database_id)
-wrangler d1 execute siscar-icatec --remote --file=schema.sql
-wrangler pages deploy
-```
+Para restringir el acceso, activa Cloudflare Access (Zero Trust) sobre el dominio del Worker.
 
-La app queda en `https://siscar-icatec.pages.dev`. Para restringir el acceso, activa Cloudflare Access (Zero Trust) sobre ese dominio.
-
-Prueba local: `wrangler d1 execute siscar-icatec --local --file=schema.sql` y luego `wrangler pages dev`.
+Prueba local: `npx wrangler d1 execute siscar-icatec --local --file=schema.sql` y luego `npx wrangler dev`.

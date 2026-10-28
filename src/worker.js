@@ -1,4 +1,4 @@
-// API de SISCAR sobre Cloudflare D1.
+// SISCAR: Worker que sirve public/ y la API sobre Cloudflare D1.
 // GET    /api/cartas        lista de cartas
 // PUT    /api/cartas/:id    crea o reemplaza una carta
 // DELETE /api/cartas/:id    elimina una carta
@@ -7,8 +7,15 @@
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 
-export async function onRequest({ request, env, params }) {
-  const [recurso, id] = params.path || [];
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
+    return api(request, env, url.pathname.slice(5).split("/").filter(Boolean));
+  },
+};
+
+async function api(request, env, [recurso, id]) {
   const db = env.DB;
   const m = request.method;
 
