@@ -14,22 +14,24 @@ Aplicación de una sola página (`index.html`) para llevar la trazabilidad de la
 ## Arquitectura
 - `public/index.html`: la aplicación.
 - `src/worker.js`: Cloudflare Worker que sirve la página y la API sobre D1.
-- `schema.sql`: tablas de D1.
+- `migrations/`: esquema de D1 (se aplica con `npx wrangler d1 migrations apply siscar-icatec --remote`).
 
 ## Despliegue
 El Worker está conectado a este repo en Cloudflare: cada push a `main` se despliega solo (`npx wrangler deploy`).
+Si el cambio trae una migración nueva, aplícala en producción justo antes del push.
 
-## Perfiles de acceso
-Todos ingresan con una clave; sin sesión la API responde 401.
-- **admin**: registra, edita y elimina cartas, y cambia los ajustes.
-- **lector**: solo consulta (la API rechaza con 403 cualquier escritura).
+## Proyectos y perfiles
+Cada proyecto es un espacio aislado: sus cartas, ajustes y personas no se ven desde otro proyecto (la API responde 404 a quien no pertenece).
+Cada persona ingresa con su propio usuario y clave, y tiene un perfil por proyecto:
+- **Admin general**: crea, renombra y elimina proyectos; nombra admins de proyecto y otros admins generales; ve todos los proyectos.
+- **Admin del proyecto**: registra, edita y elimina cartas, cambia los ajustes y da de alta o de baja a los lectores de su proyecto.
+- **Lector**: solo consulta su proyecto.
 
-Las claves y la firma de sesión son secrets del Worker (antes de desplegar esta versión):
-```
-npx wrangler secret put ADMIN_PASSWORD
-npx wrangler secret put LECTOR_PASSWORD
-npx wrangler secret put SESSION_SECRET
-```
-`SESSION_SECRET` debe ser un valor aleatorio largo (por ejemplo `openssl rand -base64 32`). Cambiarlo cierra todas las sesiones abiertas. La sesión dura 12 horas.
+Una persona puede estar en varios proyectos. Al quitarla de su último proyecto se elimina su cuenta.
+Las claves se guardan con PBKDF2; cambiar la clave cierra las sesiones abiertas con la clave anterior. La sesión dura 12 horas.
 
-Prueba local: crea `.dev.vars` con `ADMIN_PASSWORD=…`, `LECTOR_PASSWORD=…` y `SESSION_SECRET=…`, ejecuta `npx wrangler d1 execute siscar-icatec --local --file=schema.sql` y luego `npx wrangler dev`.
+Secrets del Worker:
+- `SESSION_SECRET`: firma de sesión, un valor aleatorio largo (`openssl rand -base64 32`). Cambiarlo cierra todas las sesiones.
+- `ADMIN_PASSWORD`: solo sirve para el primer ingreso. Mientras no exista ningún usuario, entrar con el usuario `admin` y esta clave crea el administrador general. Después se puede borrar.
+
+Prueba local: crea `.dev.vars` con `ADMIN_PASSWORD=…` y `SESSION_SECRET=…`, ejecuta `npx wrangler d1 migrations apply siscar-icatec --local` y luego `npx wrangler dev`.
