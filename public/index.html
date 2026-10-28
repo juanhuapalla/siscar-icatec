@@ -101,7 +101,8 @@ dd{margin:0;overflow-wrap:anywhere}
 .trace .node{position:relative;padding:6px 0 10px 16px}
 .trace .node::before{content:"";position:absolute;left:-7px;top:11px;width:10px;height:10px;border-radius:50%;background:var(--paper);border:2px solid var(--muted)}
 .trace .node.me::before{background:var(--accent);border-color:var(--accent)}
-.trace .node button{padding:0;border:0;background:none;color:var(--accent);font-weight:600;cursor:pointer}
+.trace .node button,.link{padding:0;border:0;background:none;color:var(--accent);font-weight:600;cursor:pointer}
+.tag.info{color:var(--accent);border-color:var(--accent)}
 .h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}
 /* sesión y perfiles */
 body.lector .solo-admin,body.lector #dlgDetail .dlg-foot{display:none!important}
@@ -165,6 +166,7 @@ body.lector .solo-admin,body.lector #dlgDetail .dlg-foot{display:none!important}
       <option value="">Debe responder: todos</option>
       <option>Ejecutor</option><option>Supervisión</option><option>Entidad</option><option>Otro</option>
     </select>
+    <select id="fExp" aria-label="Filtrar por expediente"><option value="">Expediente: todos</option></select>
   </div>
 
   <div class="tablebox">
@@ -189,10 +191,19 @@ body.lector .solo-admin,body.lector #dlgDetail .dlg-foot{display:none!important}
         <label>Remitente<input id="iDe" required placeholder="Supervisión"></label>
         <label>Destinatario<input id="iPara" required placeholder="Ejecutor"></label>
         <label class="full">Asunto<input id="iAsunto" required placeholder="Observaciones a la valorización N° 3"></label>
+        <label class="full">Expediente o tema (agrupa cartas relacionadas)<input id="iExpediente" list="dlExp" placeholder="Valorización N° 3"><datalist id="dlExp"></datalist></label>
         <label class="full">Enlace al documento (Drive)<input id="iLink" type="url" placeholder="https://drive.google.com/…"></label>
         <label class="full">Responde a la carta
           <select id="iRespondeA"><option value="">— Ninguna (carta nueva) —</option></select>
         </label>
+        <div class="grid full" id="efectoBox" hidden>
+          <label>Efecto sobre esa carta<select id="iEfecto">
+            <option value="cierra">Cierra su plazo (respuesta final)</option>
+            <option value="parcial">Respuesta parcial (su plazo sigue)</option>
+            <option value="amplia">Otorga ampliación de su plazo</option>
+          </select></label>
+          <label id="ampBox">Días de ampliación<input id="iAmpliacion" type="number" min="1" step="1" value="5"></label>
+        </div>
       </div>
       <label class="check"><input id="iRequiere" type="checkbox"> Esta carta requiere respuesta con plazo</label>
       <div class="grid" id="plazoBox">
@@ -220,6 +231,12 @@ body.lector .solo-admin,body.lector #dlgDetail .dlg-foot{display:none!important}
   <div class="dlg-head"><h2 id="detTitle" class="mono">Carta</h2><button type="button" data-close>Cerrar</button></div>
   <div class="dlg-body" id="detBody"></div>
   <div class="dlg-foot"><button type="button" id="btnReply" class="solo-admin">Registrar respuesta</button><button type="button" class="primary solo-admin" id="btnEdit">Editar</button></div>
+</dialog>
+
+<!-- expediente -->
+<dialog id="dlgExp" aria-labelledby="expTitle">
+  <div class="dlg-head"><h2 id="expTitle">Expediente</h2><button type="button" data-close>Cerrar</button></div>
+  <div class="dlg-body" id="expBody"></div>
 </dialog>
 
 <!-- ajustes -->
@@ -287,21 +304,35 @@ function contar(desde, hasta, tipo, fer){
   for(let t=a+DAY; t<=b; t+=DAY) if(cuenta(t,tipo,fer)) n++;
   return n;
 }
+// días de ampliación otorgados por las cartas que responden a c con efecto "amplia"
+function ampliaciones(c){
+  if(!c.id) return 0;
+  return cartas.filter(x=>x.respondeA===c.id && x.id!==c.id && x.efecto==="amplia")
+    .reduce((a,x)=>a+(Number(x.ampliacionDias)||0),0);
+}
 function calcular(c, hoy=hoyISO()){
-  if(!c.requiere) return {estado:"nr", limite:null, atraso:0, restan:null};
+  if(!c.requiere) return {estado:"nr", limite:null, atraso:0, restan:null, amp:0};
   const fer=new Set(cfg.feriados||[]);
   const inicio=c.fechaRecepcion||c.fecha;
-  if(!inicio) return {estado:"pendiente", limite:null, atraso:0, restan:null};
+  if(!inicio) return {estado:"pendiente", limite:null, atraso:0, restan:null, amp:0};
   const tipo=c.tipoPlazo||"habiles";
-  const limite=sumarPlazo(inicio, Number(c.plazoDias)||0, tipo, fer);
+  const amp=ampliaciones(c);
+  const limite=sumarPlazo(inicio, (Number(c.plazoDias)||0)+amp, tipo, fer);
   if(c.fechaRespuesta){
     const atraso = c.fechaRespuesta>limite ? contar(limite,c.fechaRespuesta,tipo,fer) : 0;
-    return {estado: atraso>0?"tarde":"ok", limite, atraso, restan:null};
+    return {estado: atraso>0?"tarde":"ok", limite, atraso, restan:null, amp};
   }
-  if(hoy>limite) return {estado:"vencida", limite, atraso:contar(limite,hoy,tipo,fer), restan:null};
+  if(hoy>limite) return {estado:"vencida", limite, atraso:contar(limite,hoy,tipo,fer), restan:null, amp};
   const restan=contar(hoy,limite,tipo,fer);
-  return {estado: restan<=Number(cfg.diasAviso) ? "porvencer":"pendiente", limite, atraso:0, restan};
+  return {estado: restan<=Number(cfg.diasAviso) ? "porvencer":"pendiente", limite, atraso:0, restan, amp};
 }
+const EFECTOS={parcial:"Respuesta parcial", amplia:"Ampliación"};
+function efectoTag(c){
+  if(!c.respondeA || !EFECTOS[c.efecto]) return "";
+  return `<span class="tag info">${c.efecto==="amplia"?`+${Number(c.ampliacionDias)||0} días`:"PARCIAL"}</span>`;
+}
+const plazoTxt = (c,r) => tipoTxt(c,Number(c.plazoDias)||0) + (r.amp?` + ${r.amp} de ampliación`:"");
+const expedientes = () => [...new Set(cartas.map(c=>c.expediente).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"es"));
 const ESTADOS={ok:"Respondida a tiempo",tarde:"Respondida con retraso",vencida:"Vencida",porvencer:"Por vencer",pendiente:"En plazo",nr:"No requiere respuesta"};
 const tipoTxt = (c,n) => `${n} ${n===1?"día":"días"}${c.tipoPlazo==="calendario"?"":" hábil"+(n===1?"":"es")}`;
 
@@ -332,12 +363,16 @@ function render(){
       <span class="when">${when} · límite ${fmt(r.limite)}</span></div>`;
   }).join("");
   // tabla
-  const q=$("fSearch").value.trim().toLowerCase(), fe=$("fEstado").value, fr=$("fResp").value;
+  const fxSel=$("fExp").value;
+  $("fExp").innerHTML=`<option value="">Expediente: todos</option>`+expedientes().map(e=>`<option>${esc(e)}</option>`).join("");
+  $("fExp").value=expedientes().includes(fxSel)?fxSel:"";
+  const q=$("fSearch").value.trim().toLowerCase(), fe=$("fEstado").value, fr=$("fResp").value, fx=$("fExp").value;
   const byId=Object.fromEntries(cartas.map(c=>[c.id,c]));
   const vis=rows.filter(({c,r})=>{
     if(fe && r.estado!==fe) return false;
     if(fr && c.debeResponder!==fr) return false;
-    if(q && ![c.numero,c.asunto,c.de,c.para,c.obs].join(" ").toLowerCase().includes(q)) return false;
+    if(fx && c.expediente!==fx) return false;
+    if(q && ![c.numero,c.asunto,c.de,c.para,c.obs,c.expediente].join(" ").toLowerCase().includes(q)) return false;
     return true;
   }).sort((a,b)=>(b.c.fecha||"").localeCompare(a.c.fecha||"") || (b.c.numero||"").localeCompare(a.c.numero||""));
   if(!vis.length){
@@ -350,10 +385,10 @@ function render(){
       <td class="mono">${esc(c.numero)}${c.ejemplo?'<span class="tag">EJEMPLO</span>':""}</td>
       <td class="mono">${fmt(c.fecha)}</td>
       <td>${esc(c.de)} <span class="sub">→</span> ${esc(c.para)}</td>
-      <td>${esc(c.asunto)}</td>
-      <td class="mono sub">${ref?esc(ref.numero):"—"}</td>
+      <td>${esc(c.asunto)}${c.expediente?`<div class="sub">Exp.: ${esc(c.expediente)}</div>`:""}</td>
+      <td class="mono sub">${ref?esc(ref.numero):"—"}${efectoTag(c)}</td>
       <td>${c.requiere?esc(c.debeResponder):'<span class="sub">—</span>'}</td>
-      <td class="mono">${r.limite?fmt(r.limite):"—"}${r.limite?`<div class="sub">${tipoTxt(c,Number(c.plazoDias)||0)}</div>`:""}</td>
+      <td class="mono">${r.limite?fmt(r.limite):"—"}${r.limite?`<div class="sub">${plazoTxt(c,r)}</div>`:""}</td>
       <td class="mono">${c.fechaRespuesta?fmt(c.fechaRespuesta):"—"}${c.cartaRespuesta?`<div class="sub">${esc(c.cartaRespuesta)}</div>`:""}</td>
       <td><span class="pill p-${r.estado}">${ESTADOS[r.estado]}</span>${r.estado==="porvencer"?`<div class="sub">faltan ${r.restan}</div>`:""}</td>
       <td class="num mono ${r.atraso?"late":""}">${r.atraso||"—"}</td>
@@ -389,10 +424,12 @@ function openDetail(id){
       <dt>Asunto</dt><dd>${esc(c.asunto)}</dd>
       <dt>Fecha</dt><dd class="mono">${fmt(c.fecha)}</dd>
       <dt>De → Para</dt><dd>${esc(c.de)} → ${esc(c.para)}</dd>
+      ${c.expediente?`<dt>Expediente</dt><dd><button type="button" class="link" data-exp="${esc(c.expediente)}">${esc(c.expediente)}</button></dd>`:""}
+      ${c.respondeA && EFECTOS[c.efecto]?`<dt>Efecto</dt><dd>${EFECTOS[c.efecto]}${c.efecto==="amplia"?` de ${Number(c.ampliacionDias)||0} días`:" (no cierra el plazo)"}</dd>`:""}
       ${c.requiere?`
       <dt>Debe responder</dt><dd>${esc(c.debeResponder)}</dd>
       <dt>Recepción</dt><dd class="mono">${fmt(c.fechaRecepcion||c.fecha)}</dd>
-      <dt>Plazo</dt><dd>${tipoTxt(c,Number(c.plazoDias)||0)}</dd>
+      <dt>Plazo</dt><dd>${plazoTxt(c,r)}</dd>
       <dt>Fecha límite</dt><dd class="mono">${fmt(r.limite)}</dd>
       <dt>Respondida</dt><dd class="mono">${c.fechaRespuesta?fmt(c.fechaRespuesta)+(c.cartaRespuesta?" · "+esc(c.cartaRespuesta):""):"Pendiente"}</dd>`:""}
       <dt>Documento</dt><dd>${c.link?`<a href="${esc(c.link)}" target="_blank" rel="noopener">Abrir en Drive</a>`:"Sin enlace"}</dd>
@@ -404,9 +441,32 @@ function openDetail(id){
       return `<div class="node ${x.id===id?"me":""}" style="margin-left:${depth*14}px">
         ${x.id===id?`<b class="mono">${esc(x.numero)}</b>`:`<button type="button" class="mono" data-goto="${esc(x.id)}">${esc(x.numero)}</button>`}
         <span class="sub"> · ${fmt(x.fecha)} · ${esc(x.de)} → ${esc(x.para)}</span>
-        <div>${esc(x.asunto)} <span class="pill p-${rx.estado}">${ESTADOS[rx.estado]}</span></div></div>`;
+        <div>${esc(x.asunto)} <span class="pill p-${rx.estado}">${ESTADOS[rx.estado]}</span>${efectoTag(x)}</div></div>`;
     }).join("")}</div>`;
+  if($("dlgExp").open) $("dlgExp").close();
   if(!$("dlgDetail").open) $("dlgDetail").showModal();
+}
+
+/* ---------- expediente ---------- */
+function openExp(nombre){
+  const lista=cartas.filter(c=>c.expediente===nombre)
+    .sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"") || (a.numero||"").localeCompare(b.numero||""));
+  const rs=lista.map(c=>({c, r:calcular(c)}));
+  const abiertas=rs.filter(x=>["pendiente","porvencer","vencida"].includes(x.r.estado)).length;
+  const venc=rs.filter(x=>x.r.estado==="vencida").length;
+  const penDias=rs.filter(x=>x.c.debeResponder==="Ejecutor").reduce((a,x)=>a+x.r.atraso,0);
+  const monto=Number(cfg.montoDia)>0 ? ` · S/ ${(penDias*Number(cfg.montoDia)).toLocaleString("es-PE",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "";
+  $("expTitle").textContent=nombre;
+  $("expBody").innerHTML=`
+    <div><span class="pill ${abiertas?"p-pendiente":"p-ok"}">${abiertas?"Abierto":"Cerrado"}</span>
+      <span class="sub"> ${lista.length} ${lista.length===1?"carta":"cartas"} · ${abiertas} esperando respuesta${venc?` · <span class="late">${venc} vencida${venc===1?"":"s"}</span>`:""} · penalidad ejecutor: ${penDias} días${monto}</span></div>
+    <div class="h3">Línea de tiempo</div>
+    <div class="trace">${rs.map(({c,r})=>`<div class="node">
+        <button type="button" class="mono" data-goto="${esc(c.id)}">${esc(c.numero)}</button>
+        <span class="sub"> · ${fmt(c.fecha)} · ${esc(c.de)} → ${esc(c.para)}</span>
+        <div>${esc(c.asunto)} <span class="pill p-${r.estado}">${ESTADOS[r.estado]}</span>${efectoTag(c)}${r.limite&&!c.fechaRespuesta?` <span class="sub">límite ${fmt(r.limite)}</span>`:""}</div></div>`).join("")}</div>`;
+  if($("dlgDetail").open) $("dlgDetail").close();
+  if(!$("dlgExp").open) $("dlgExp").showModal();
 }
 
 /* ---------- formulario ---------- */
@@ -417,10 +477,13 @@ function fillRespondeA(excludeId, selected){
   $("iRespondeA").value=selected||"";
 }
 function togglePlazo(){ $("plazoBox").hidden=!$("iRequiere").checked; updateCalc(); }
+function toggleEfecto(){ $("efectoBox").hidden=!$("iRespondeA").value; $("ampBox").hidden=$("iEfecto").value!=="amplia"; }
 function formData(){
+  const respondeA=$("iRespondeA").value, efecto=respondeA?$("iEfecto").value:"";
   return {
     numero:$("iNumero").value.trim(), fecha:$("iFecha").value, de:$("iDe").value.trim(), para:$("iPara").value.trim(),
-    asunto:$("iAsunto").value.trim(), link:$("iLink").value.trim(), respondeA:$("iRespondeA").value,
+    asunto:$("iAsunto").value.trim(), expediente:$("iExpediente").value.trim(), link:$("iLink").value.trim(), respondeA,
+    efecto, ampliacionDias: efecto==="amplia" ? Number($("iAmpliacion").value)||0 : 0,
     requiere:$("iRequiere").checked, debeResponder:$("iDebe").value, fechaRecepcion:$("iRecep").value,
     plazoDias:Number($("iPlazo").value)||0, tipoPlazo:$("iTipo").value, fechaRespuesta:$("iFResp").value,
     cartaRespuesta:$("iCResp").value.trim(), obs:$("iObs").value.trim()
@@ -430,8 +493,8 @@ function updateCalc(){
   const d=formData();
   if(!d.requiere){ $("calc").textContent=""; return; }
   if(!(d.fechaRecepcion||d.fecha)){ $("calc").textContent="Indica la fecha de recepción para calcular la fecha límite."; return; }
-  const r=calcular(d);
-  let t=`Fecha límite: ${fmt(r.limite)}. `;
+  const r=calcular({...d, id:editingId});
+  let t=`Fecha límite: ${fmt(r.limite)}${r.amp?` (incluye ${r.amp} días de ampliación)`:""}. `;
   if(r.estado==="tarde"||r.estado==="vencida") t+=`Atraso: ${tipoTxt(d,r.atraso)}.`;
   else if(r.estado==="ok") t+="Respondida dentro del plazo.";
   else t+=`Faltan ${tipoTxt(d,r.restan)}.`;
@@ -443,7 +506,9 @@ function openForm(id, preset){
   $("formTitle").textContent=id?"Editar carta":"Registrar carta";
   $("iNumero").value=c.numero||""; $("iFecha").value=c.fecha||hoyISO(); $("iDe").value=c.de||""; $("iPara").value=c.para||"";
   $("iAsunto").value=c.asunto||""; $("iLink").value=c.link||"";
+  $("iExpediente").value=c.expediente||""; $("dlExp").innerHTML=expedientes().map(e=>`<option value="${esc(e)}">`).join("");
   fillRespondeA(id,c.respondeA);
+  $("iEfecto").value=c.efecto||"cierra"; $("iAmpliacion").value=c.ampliacionDias||5; toggleEfecto();
   $("iRequiere").checked=!!c.requiere; $("iDebe").value=c.debeResponder||"Ejecutor";
   $("iRecep").value=c.fechaRecepcion||""; $("iPlazo").value=c.plazoDias ?? 5; $("iTipo").value=c.tipoPlazo||"habiles";
   $("iFResp").value=c.fechaRespuesta||""; $("iCResp").value=c.cartaRespuesta||""; $("iObs").value=c.obs||"";
@@ -456,18 +521,23 @@ async function save(e){
   e.preventDefault();
   const d=formData();
   if(d.requiere && !(d.fechaRecepcion||d.fecha)){ showErr("formErr","Falta la fecha de recepción."); return; }
+  if(d.efecto==="amplia" && !(d.ampliacionDias>0)){ showErr("formErr","Indica cuántos días de ampliación se otorgan."); return; }
   const prev = editingId ? cartas.find(x=>x.id===editingId) : null;
   if(prev?.ejemplo) d.ejemplo=true;
   $("btnSave").disabled=true;
   try{
     const id = editingId || crypto.randomUUID();
     await api("PUT","cartas/"+id,d);
-    // trazabilidad: cerrar la carta a la que responde
+    // trazabilidad: solo una respuesta final cierra la carta a la que responde;
+    // si esta carta la había cerrado y ahora es parcial o ampliación, se reabre
     if(d.respondeA){
       const orig=cartas.find(x=>x.id===d.respondeA);
-      if(orig && orig.requiere && (!orig.fechaRespuesta || orig.respuestaId===id)){
+      if(orig && orig.requiere){
         const {id:oid, ...body}=orig;
-        await api("PUT","cartas/"+oid,{...body, fechaRespuesta:d.fecha, cartaRespuesta:d.numero, respuestaId:id});
+        if(d.efecto==="cierra" && (!orig.fechaRespuesta || orig.respuestaId===id))
+          await api("PUT","cartas/"+oid,{...body, fechaRespuesta:d.fecha, cartaRespuesta:d.numero, respuestaId:id});
+        else if(d.efecto!=="cierra" && orig.respuestaId===id)
+          await api("PUT","cartas/"+oid,{...body, fechaRespuesta:"", cartaRespuesta:"", respuestaId:""});
       }
     }
     $("dlgForm").close();
@@ -514,12 +584,13 @@ $("form").addEventListener("submit",save);
 $("cfgForm").addEventListener("submit",saveConfig);
 $("btnDelete").onclick=del;
 $("iRequiere").onchange=togglePlazo;
+["iRespondeA","iEfecto"].forEach(i=>$(i).addEventListener("input",toggleEfecto));
 ["iFecha","iRecep","iPlazo","iTipo","iFResp"].forEach(i=>$(i).addEventListener("input",updateCalc));
-["fSearch","fEstado","fResp"].forEach(i=>$(i).addEventListener("input",render));
+["fSearch","fEstado","fResp","fExp"].forEach(i=>$(i).addEventListener("input",render));
 $("btnEdit").onclick=()=>{ $("dlgDetail").close(); openForm(detailId); };
 $("btnReply").onclick=()=>{
   const c=cartas.find(x=>x.id===detailId); $("dlgDetail").close();
-  openForm(null,{respondeA:c.id, de:c.para, para:c.de, asunto:"Respuesta: "+c.asunto, fecha:hoyISO()});
+  openForm(null,{respondeA:c.id, de:c.para, para:c.de, asunto:"Respuesta: "+c.asunto, expediente:c.expediente, fecha:hoyISO()});
 };
 function rowOpen(e){
   const el=e.target.closest("[data-id]"); if(!el) return;
@@ -527,7 +598,10 @@ function rowOpen(e){
   openDetail(el.dataset.id);
 }
 ["click","keydown"].forEach(t=>{ $("rows").addEventListener(t,rowOpen); $("alerts").addEventListener(t,rowOpen); });
-$("detBody").addEventListener("click",e=>{ const g=e.target.closest("[data-goto]"); if(g) openDetail(g.dataset.goto); });
+["detBody","expBody"].forEach(i=>$(i).addEventListener("click",e=>{
+  const g=e.target.closest("[data-goto]"); if(g) return openDetail(g.dataset.goto);
+  const x=e.target.closest("[data-exp]"); if(x) openExp(x.dataset.exp);
+}));
 // recalcular estados al cambiar de día
 setInterval(()=>{ if(document.visibilityState==="visible") render(); }, 60*60*1000);
 

@@ -8,6 +8,8 @@ Aplicación de una sola página (`index.html`) para llevar la trazabilidad de la
 - Alertas de cartas por vencer y vencidas.
 - Cálculo de días de penalidad del ejecutor y monto, si se configura la penalidad diaria.
 - Cadena de trazabilidad carta → respuesta.
+- Expedientes: agrupan cartas de un mismo tema aunque estén en cadenas distintas; filtro y vista con línea de tiempo, cartas abiertas y penalidad del expediente.
+- Efecto de cada respuesta: cierra el plazo de la carta a la que responde, es parcial (el plazo sigue) u otorga una ampliación de N días que mueve la fecha límite.
 
 ## Arquitectura
 - `public/index.html`: la aplicación.
