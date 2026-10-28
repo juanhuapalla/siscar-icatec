@@ -9,6 +9,7 @@ Aplicación de una sola página (`index.html`) para llevar la trazabilidad de la
 - Cálculo de días de penalidad del ejecutor y monto, si se configura la penalidad diaria.
 - Cadena de trazabilidad carta → respuesta.
 - Expedientes: agrupan cartas de un mismo tema aunque estén en cadenas distintas; filtro y vista con línea de tiempo, cartas abiertas y penalidad del expediente.
+- Derivación a especialista (Seg. de la Inf., Sanitario, Estructuras, etc.), con filtro en la tabla. La lista es común a todos los proyectos y solo el admin general la mantiene: agregar, renombrar, ordenar, desactivar o eliminar (solo si ninguna carta lo usa).
 - Efecto de cada respuesta: cierra el plazo de la carta a la que responde, es parcial (el plazo sigue) u otorga una ampliación de N días que mueve la fecha límite.
 
 ## Arquitectura
@@ -23,7 +24,7 @@ Si el cambio trae una migración nueva, aplícala en producción justo antes del
 ## Proyectos y perfiles
 Cada proyecto es un espacio aislado: sus cartas, ajustes y personas no se ven desde otro proyecto (la API responde 404 a quien no pertenece).
 Cada persona ingresa con su propio usuario y clave, y tiene un perfil por proyecto:
-- **Admin general**: crea, renombra y elimina proyectos; nombra admins de proyecto y otros admins generales; ve todos los proyectos.
+- **Admin general**: crea, renombra y elimina proyectos; mantiene la lista de especialistas; nombra admins de proyecto y otros admins generales; ve todos los proyectos.
 - **Admin del proyecto**: registra, edita y elimina cartas, cambia los ajustes y da de alta o de baja a los lectores de su proyecto.
 - **Lector**: solo consulta su proyecto.
 

@@ -23,6 +23,12 @@
 // PATCH  /api/p/:pid/miembros/:uid       {rol?, clave?}                (admin: solo sus lectores)
 // DELETE /api/p/:pid/miembros/:uid                                     (admin: solo lectores)
 //
+// Especialistas a los que se deriva una carta (catálogo común a todos los proyectos)
+// GET    /api/especialistas                                            (todos)
+// POST   /api/especialistas              {nombre}                     (general)
+// PATCH  /api/especialistas/:id          {nombre?, activo?, mover?}   (general; mover: "arriba" | "abajo")
+// DELETE /api/especialistas/:id                                        (general; solo si ninguna carta lo usa)
+//
 // Administradores generales
 // GET    /api/usuarios                                                 (general)
 // POST   /api/usuarios                   {usuario, nombre, clave}      (general)
@@ -136,6 +142,54 @@ async function api(request, env, ruta) {
       return vacio();
     }
     if (sub === "miembros") return miembros(request, db, yo, p, rol, id, cuerpo);
+  }
+
+  /* ---------- especialistas ---------- */
+  if (recurso === "especialistas") {
+    const [, eid] = ruta;
+    if (!eid && m === "GET") {
+      const { results } = await db.prepare("SELECT id, nombre, orden, activo FROM especialistas ORDER BY orden, nombre").all();
+      return json(results.map(e => ({ ...e, activo: !!e.activo })));
+    }
+    if (!yo.general) throw fallo(403, "Solo el administrador general edita la lista de especialistas");
+    if (!eid && m === "POST") {
+      const nombre = texto((await cuerpo()).nombre, "el nombre del especialista", 80);
+      const id = crypto.randomUUID();
+      const r = await db.prepare(`INSERT INTO especialistas (id, nombre, orden)
+          VALUES (?1, ?2, (SELECT COALESCE(MAX(orden), 0) + 1 FROM especialistas)) ON CONFLICT(nombre) DO NOTHING`)
+        .bind(id, nombre).run();
+      if (!r.meta.changes) throw fallo(409, `“${nombre}” ya está en la lista`);
+      return json({ id, nombre }, 201);
+    }
+    const e = await db.prepare("SELECT id, nombre, orden FROM especialistas WHERE id = ?1").bind(eid).first();
+    if (!e) throw fallo(404, "Especialista no encontrado");
+    if (m === "PATCH") {
+      const b = await cuerpo();
+      if (b.nombre !== undefined) {
+        const nombre = texto(b.nombre, "el nombre del especialista", 80);
+        const otro = await db.prepare("SELECT 1 FROM especialistas WHERE nombre = ?1 AND id <> ?2").bind(nombre, e.id).first();
+        if (otro) throw fallo(409, `“${nombre}” ya está en la lista`);
+        await db.prepare("UPDATE especialistas SET nombre = ?1 WHERE id = ?2").bind(nombre, e.id).run();
+      }
+      if (b.activo !== undefined)
+        await db.prepare("UPDATE especialistas SET activo = ?1 WHERE id = ?2").bind(b.activo ? 1 : 0, e.id).run();
+      if (b.mover === "arriba" || b.mover === "abajo") {
+        const vecino = await db.prepare(b.mover === "arriba"
+          ? "SELECT id, orden FROM especialistas WHERE orden < ?1 ORDER BY orden DESC LIMIT 1"
+          : "SELECT id, orden FROM especialistas WHERE orden > ?1 ORDER BY orden LIMIT 1").bind(e.orden).first();
+        if (vecino) await db.batch([
+          db.prepare("UPDATE especialistas SET orden = ?1 WHERE id = ?2").bind(vecino.orden, e.id),
+          db.prepare("UPDATE especialistas SET orden = ?1 WHERE id = ?2").bind(e.orden, vecino.id),
+        ]);
+      }
+      return vacio();
+    }
+    if (m === "DELETE") {
+      const uso = await db.prepare("SELECT COUNT(*) AS n FROM cartas WHERE json_extract(data, '$.derivadoA') = ?1").bind(e.id).first();
+      if (uso.n) throw fallo(409, `“${e.nombre}” está asignado a ${uso.n} carta${uso.n === 1 ? "" : "s"}; desactívalo en lugar de eliminarlo`);
+      await db.prepare("DELETE FROM especialistas WHERE id = ?1").bind(e.id).run();
+      return vacio();
+    }
   }
 
   /* ---------- administradores generales ---------- */

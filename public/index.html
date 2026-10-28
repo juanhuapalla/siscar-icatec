@@ -34,6 +34,7 @@ h1{font-family:var(--f-display);font-size:26px;font-weight:700;margin:0;letter-s
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 button,.btn{font:inherit;font-weight:600;border-radius:6px;border:1px solid var(--line);background:var(--paper);color:var(--ink);padding:8px 14px;cursor:pointer}
 button:hover{border-color:var(--accent)}
+button:disabled{opacity:.4;cursor:default;border-color:var(--line)}
 button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 button.danger{color:var(--crit);border-color:var(--crit)}
 button.danger.armed{background:var(--crit);color:var(--paper)}
@@ -149,6 +150,7 @@ body.lector .solo-admin,body.lector #dlgDetail .dlg-foot,body:not(.general) .sol
       <button id="btnClave" type="button">Mi clave</button>
       <button id="btnLogout" type="button">Salir</button>
       <button id="btnProyectos" class="solo-general" type="button">Proyectos</button>
+      <button id="btnEsp" class="solo-general" type="button">Especialistas</button>
       <button id="btnPersonas" class="solo-admin" type="button">Personas</button>
       <button id="btnConfig" class="solo-admin" type="button">Ajustes</button>
       <button id="btnNew" class="primary solo-admin" type="button">Registrar carta</button>
@@ -184,6 +186,7 @@ body.lector .solo-admin,body.lector #dlgDetail .dlg-foot,body:not(.general) .sol
       <option>Ejecutor</option><option>Supervisión</option><option>Entidad</option><option>Otro</option>
     </select>
     <select id="fExp" aria-label="Filtrar por expediente"><option value="">Expediente: todos</option></select>
+    <select id="fEsp" aria-label="Filtrar por especialista"><option value="">Especialista: todos</option></select>
   </div>
 
   <div class="tablebox">
@@ -210,6 +213,7 @@ body.lector .solo-admin,body.lector #dlgDetail .dlg-foot,body:not(.general) .sol
         <label>Destinatario<input id="iPara" required placeholder="Ejecutor"></label>
         <label class="full">Asunto<input id="iAsunto" required placeholder="Observaciones a la valorización N° 3"></label>
         <label class="full">Expediente o tema (agrupa cartas relacionadas)<input id="iExpediente" list="dlExp" placeholder="Valorización N° 3"><datalist id="dlExp"></datalist></label>
+        <label class="full">Derivar a especialista<select id="iDerivado"></select></label>
         <label class="full">Enlace al documento (Drive)<input id="iLink" type="url" placeholder="https://drive.google.com/…"></label>
         <label class="full">Responde a la carta
           <select id="iRespondeA"><option value="">— Ninguna (carta nueva) —</option></select>
@@ -299,6 +303,21 @@ body.lector .solo-admin,body.lector #dlgDetail .dlg-foot,body:not(.general) .sol
   </div>
 </dialog>
 
+<!-- especialistas (admin general) -->
+<dialog id="dlgEsp" aria-labelledby="espTitle">
+  <div class="dlg-head"><h2 id="espTitle">Especialistas</h2><button type="button" data-close>Cerrar</button></div>
+  <div class="dlg-body">
+    <div class="sub">Lista común a todos los proyectos para el campo “Derivar a especialista”. Un especialista desactivado ya no se ofrece en cartas nuevas, pero se conserva en las que ya lo tienen.</div>
+    <div class="lista" id="espLista"></div>
+    <div class="err" id="espListaErr" hidden></div>
+    <form id="espForm" class="grid">
+      <label class="full">Nuevo especialista<input id="espNombre" required maxlength="80" placeholder="Mecánico"></label>
+      <div class="err full" id="espErr" hidden></div>
+      <div class="full"><button type="submit" class="primary">Agregar</button></div>
+    </form>
+  </div>
+</dialog>
+
 <!-- mi clave -->
 <dialog id="dlgClave" aria-labelledby="claTitle">
   <form id="claForm" method="dialog">
@@ -338,6 +357,8 @@ const DEFAULT_CFG = {
 };
 let cfg = {...DEFAULT_CFG};
 let cartas = [];          // [{id, ...data}]
+let especialistas = [];   // [{id, nombre, orden, activo}] catálogo común a todos los proyectos
+const espNombre = id => especialistas.find(e=>e.id===id)?.nombre || "";
 let yo = null;             // {id, usuario, nombre, general, proyectos:[{id, nombre, rol}]}
 let pid = null;            // proyecto abierto
 let rol = null;            // perfil en el proyecto abierto: "admin" | "lector"
@@ -437,16 +458,21 @@ function render(){
       <span class="when">${when} · límite ${fmt(r.limite)}</span></div>`;
   }).join("");
   // tabla
+  const feSel=$("fEsp").value;
+  const usados=new Set(cartas.map(c=>c.derivadoA).filter(Boolean));
+  $("fEsp").innerHTML=`<option value="">Especialista: todos</option><option value="-">Sin derivar</option>`+especialistas.filter(e=>usados.has(e.id)||e.activo).map(e=>`<option value="${esc(e.id)}">${esc(e.nombre)}</option>`).join("");
+  $("fEsp").value=[...$("fEsp").options].some(o=>o.value===feSel)?feSel:"";
   const fxSel=$("fExp").value;
   $("fExp").innerHTML=`<option value="">Expediente: todos</option>`+expedientes().map(e=>`<option>${esc(e)}</option>`).join("");
   $("fExp").value=expedientes().includes(fxSel)?fxSel:"";
-  const q=$("fSearch").value.trim().toLowerCase(), fe=$("fEstado").value, fr=$("fResp").value, fx=$("fExp").value;
+  const q=$("fSearch").value.trim().toLowerCase(), fe=$("fEstado").value, fr=$("fResp").value, fx=$("fExp").value, fs=$("fEsp").value;
   const byId=Object.fromEntries(cartas.map(c=>[c.id,c]));
   const vis=rows.filter(({c,r})=>{
     if(fe && r.estado!==fe) return false;
     if(fr && c.debeResponder!==fr) return false;
     if(fx && c.expediente!==fx) return false;
-    if(q && ![c.numero,c.asunto,c.de,c.para,c.obs,c.expediente].join(" ").toLowerCase().includes(q)) return false;
+    if(fs && (fs==="-" ? !!c.derivadoA : c.derivadoA!==fs)) return false;
+    if(q && ![c.numero,c.asunto,c.de,c.para,c.obs,c.expediente,espNombre(c.derivadoA)].join(" ").toLowerCase().includes(q)) return false;
     return true;
   }).sort((a,b)=>(b.c.fecha||"").localeCompare(a.c.fecha||"") || (b.c.numero||"").localeCompare(a.c.numero||""));
   if(!vis.length){
@@ -459,7 +485,7 @@ function render(){
       <td class="mono">${esc(c.numero)}${c.ejemplo?'<span class="tag">EJEMPLO</span>':""}</td>
       <td class="mono">${fmt(c.fecha)}</td>
       <td>${esc(c.de)} <span class="sub">→</span> ${esc(c.para)}</td>
-      <td>${esc(c.asunto)}${c.expediente?`<div class="sub">Exp.: ${esc(c.expediente)}</div>`:""}</td>
+      <td>${esc(c.asunto)}${c.expediente?`<div class="sub">Exp.: ${esc(c.expediente)}</div>`:""}${c.derivadoA?`<div class="sub">Derivada a: ${esc(espNombre(c.derivadoA)||"especialista eliminado")}</div>`:""}</td>
       <td class="mono sub">${ref?esc(ref.numero):"—"}${efectoTag(c)}</td>
       <td>${c.requiere?esc(c.debeResponder):'<span class="sub">—</span>'}</td>
       <td class="mono">${r.limite?fmt(r.limite):"—"}${r.limite?`<div class="sub">${plazoTxt(c,r)}</div>`:""}</td>
@@ -498,6 +524,7 @@ function openDetail(id){
       <dt>Asunto</dt><dd>${esc(c.asunto)}</dd>
       <dt>Fecha</dt><dd class="mono">${fmt(c.fecha)}</dd>
       <dt>De → Para</dt><dd>${esc(c.de)} → ${esc(c.para)}</dd>
+      ${c.derivadoA?`<dt>Derivada a</dt><dd>${esc(espNombre(c.derivadoA)||"especialista eliminado")}</dd>`:""}
       ${c.expediente?`<dt>Expediente</dt><dd><button type="button" class="link" data-exp="${esc(c.expediente)}">${esc(c.expediente)}</button></dd>`:""}
       ${c.respondeA && EFECTOS[c.efecto]?`<dt>Efecto</dt><dd>${EFECTOS[c.efecto]}${c.efecto==="amplia"?` de ${Number(c.ampliacionDias)||0} días`:" (no cierra el plazo)"}</dd>`:""}
       ${c.requiere?`
@@ -556,7 +583,7 @@ function formData(){
   const respondeA=$("iRespondeA").value, efecto=respondeA?$("iEfecto").value:"";
   return {
     numero:$("iNumero").value.trim(), fecha:$("iFecha").value, de:$("iDe").value.trim(), para:$("iPara").value.trim(),
-    asunto:$("iAsunto").value.trim(), expediente:$("iExpediente").value.trim(), link:$("iLink").value.trim(), respondeA,
+    asunto:$("iAsunto").value.trim(), expediente:$("iExpediente").value.trim(), derivadoA:$("iDerivado").value, link:$("iLink").value.trim(), respondeA,
     efecto, ampliacionDias: efecto==="amplia" ? Number($("iAmpliacion").value)||0 : 0,
     requiere:$("iRequiere").checked, debeResponder:$("iDebe").value, fechaRecepcion:$("iRecep").value,
     plazoDias:Number($("iPlazo").value)||0, tipoPlazo:$("iTipo").value, fechaRespuesta:$("iFResp").value,
@@ -580,6 +607,9 @@ function openForm(id, preset){
   $("formTitle").textContent=id?"Editar carta":"Registrar carta";
   $("iNumero").value=c.numero||""; $("iFecha").value=c.fecha||hoyISO(); $("iDe").value=c.de||""; $("iPara").value=c.para||"";
   $("iAsunto").value=c.asunto||""; $("iLink").value=c.link||"";
+  $("iDerivado").innerHTML=`<option value="">— Sin derivar —</option>`+especialistas.filter(e=>e.activo||e.id===c.derivadoA)
+    .map(e=>`<option value="${esc(e.id)}">${esc(e.nombre)}${e.activo?"":" (inactivo)"}</option>`).join("");
+  $("iDerivado").value=c.derivadoA||"";
   $("iExpediente").value=c.expediente||""; $("dlExp").innerHTML=expedientes().map(e=>`<option value="${esc(e)}">`).join("");
   fillRespondeA(id,c.respondeA);
   $("iEfecto").value=c.efecto||"cierra"; $("iAmpliacion").value=c.ampliacionDias||5; toggleEfecto();
@@ -660,7 +690,7 @@ $("btnDelete").onclick=del;
 $("iRequiere").onchange=togglePlazo;
 ["iRespondeA","iEfecto"].forEach(i=>$(i).addEventListener("input",toggleEfecto));
 ["iFecha","iRecep","iPlazo","iTipo","iFResp"].forEach(i=>$(i).addEventListener("input",updateCalc));
-["fSearch","fEstado","fResp","fExp"].forEach(i=>$(i).addEventListener("input",render));
+["fSearch","fEstado","fResp","fExp","fEsp"].forEach(i=>$(i).addEventListener("input",render));
 $("btnEdit").onclick=()=>{ $("dlgDetail").close(); openForm(detailId); };
 $("btnReply").onclick=()=>{
   const c=cartas.find(x=>x.id===detailId); $("dlgDetail").close();
@@ -684,9 +714,9 @@ async function cargar(){
   if(!pid) return;
   const mio=pid;
   try{
-    const [c, k] = await Promise.all([api("GET",P("cartas")), api("GET",P("config"))]);
+    const [c, k, e] = await Promise.all([api("GET",P("cartas")), api("GET",P("config")), api("GET","especialistas")]);
     if(mio!==pid) return; // se cambió de proyecto mientras cargaba
-    cartas = c; cfg = {...DEFAULT_CFG, ...(k||{})};
+    cartas = c; cfg = {...DEFAULT_CFG, ...(k||{})}; especialistas = e;
     $("status").hidden=true;
     render();
     if(detailId && $("dlgDetail").open) openDetail(detailId);
@@ -893,6 +923,51 @@ $("genForm").addEventListener("submit", async e=>{
   }catch(err){ showErr("genErr", err.message+"."); }
 });
 $("btnProyectos").onclick=openProyectos;
+
+/* ---------- especialistas (admin general) ---------- */
+async function openEsp(){
+  $("espNombre").value=""; ["espErr","espListaErr"].forEach(i=>$(i).hidden=true);
+  if(!$("dlgEsp").open) $("dlgEsp").showModal();
+  await listarEsp();
+}
+async function listarEsp(){
+  especialistas=await api("GET","especialistas");
+  $("espLista").innerHTML = especialistas.length ? especialistas.map((e,i)=>`<div class="item" data-eid="${esc(e.id)}">
+      <div class="grow"><b>${esc(e.nombre)}</b>${e.activo?"":' <span class="pill p-nr">Inactivo</span>'}</div>
+      <button type="button" data-mover="arriba" ${i===0?"disabled":""} aria-label="Subir ${esc(e.nombre)}">↑</button>
+      <button type="button" data-mover="abajo" ${i===especialistas.length-1?"disabled":""} aria-label="Bajar ${esc(e.nombre)}">↓</button>
+      <button type="button" data-renombrar>Renombrar</button>
+      <button type="button" data-activo="${e.activo?0:1}">${e.activo?"Desactivar":"Activar"}</button>
+      <button type="button" class="danger" data-eliminar>Eliminar</button>
+    </div>`).join("") : `<div class="vacia">La lista está vacía.</div>`;
+}
+$("espLista").addEventListener("click", async e=>{
+  const item=e.target.closest("[data-eid]"); if(!item || !e.target.matches("button")) return;
+  const ruta="especialistas/"+encodeURIComponent(item.dataset.eid), b=e.target;
+  $("espListaErr").hidden=true;
+  try{
+    if(b.dataset.mover){ await api("PATCH",ruta,{mover:b.dataset.mover}); }
+    else if(b.dataset.activo!==undefined){ await api("PATCH",ruta,{activo:b.dataset.activo==="1"}); }
+    else if(b.matches("[data-renombrar]")){
+      const actual=especialistas.find(x=>x.id===item.dataset.eid).nombre;
+      item.querySelector(".grow").innerHTML=`<input data-nombre maxlength="80" value="${esc(actual)}" aria-label="Nuevo nombre">`;
+      b.outerHTML=`<button type="button" class="primary" data-guardar>Guardar</button>`;
+      item.querySelector("[data-nombre]").focus(); return;
+    }
+    else if(b.matches("[data-guardar]")){ await api("PATCH",ruta,{nombre:item.querySelector("[data-nombre]").value}); }
+    else if(b.matches("[data-eliminar]")){
+      if(!b.classList.contains("armed")){ b.classList.add("armed"); b.textContent="Confirmar"; return; }
+      await api("DELETE",ruta);
+    }
+    await listarEsp(); render();
+  }catch(err){ showErr("espListaErr", err.message+"."); }
+});
+$("espForm").addEventListener("submit", async e=>{
+  e.preventDefault(); $("espErr").hidden=true;
+  try{ await api("POST","especialistas",{nombre:$("espNombre").value}); $("espNombre").value=""; await listarEsp(); render(); }
+  catch(err){ showErr("espErr", err.message+"."); }
+});
+$("btnEsp").onclick=openEsp;
 
 api("GET","sesion").then(s=>entrar(s)).catch(()=>mostrarLogin());
 setInterval(()=>{ if(pid && document.visibilityState==="visible" && !document.querySelector("dialog[open]")) cargar(); }, 30000);
