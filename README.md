@@ -17,6 +17,17 @@ Aplicación de una sola página (`index.html`) para llevar la trazabilidad de la
 ## Despliegue
 El Worker está conectado a este repo en Cloudflare: cada push a `main` se despliega solo (`npx wrangler deploy`).
 
-Para restringir el acceso, activa Cloudflare Access (Zero Trust) sobre el dominio del Worker.
+## Perfiles de acceso
+Todos ingresan con una clave; sin sesión la API responde 401.
+- **admin**: registra, edita y elimina cartas, y cambia los ajustes.
+- **lector**: solo consulta (la API rechaza con 403 cualquier escritura).
 
-Prueba local: `npx wrangler d1 execute siscar-icatec --local --file=schema.sql` y luego `npx wrangler dev`.
+Las claves y la firma de sesión son secrets del Worker (antes de desplegar esta versión):
+```
+npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put LECTOR_PASSWORD
+npx wrangler secret put SESSION_SECRET
+```
+`SESSION_SECRET` debe ser un valor aleatorio largo (por ejemplo `openssl rand -base64 32`). Cambiarlo cierra todas las sesiones abiertas. La sesión dura 12 horas.
+
+Prueba local: crea `.dev.vars` con `ADMIN_PASSWORD=…`, `LECTOR_PASSWORD=…` y `SESSION_SECRET=…`, ejecuta `npx wrangler d1 execute siscar-icatec --local --file=schema.sql` y luego `npx wrangler dev`.

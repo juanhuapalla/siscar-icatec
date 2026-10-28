@@ -103,18 +103,39 @@ dd{margin:0;overflow-wrap:anywhere}
 .trace .node.me::before{background:var(--accent);border-color:var(--accent)}
 .trace .node button{padding:0;border:0;background:none;color:var(--accent);font-weight:600;cursor:pointer}
 .h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700}
+/* sesión y perfiles */
+body.lector .solo-admin,body.lector #dlgDetail .dlg-foot{display:none!important}
+.who{align-self:center;font-size:12px;color:var(--muted)}
+.who b{color:var(--ink);text-transform:capitalize}
+.login{min-height:100vh;display:grid;place-items:center;padding:16px}
+.login form{width:min(360px,100%);background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:24px;display:flex;flex-direction:column;gap:14px}
+.login h1{font-size:22px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
-<div class="wrap">
+<section class="login" id="login" hidden>
+  <form id="loginForm">
+    <div>
+      <div class="proj">SISCAR</div>
+      <h1>Control de Cartas</h1>
+    </div>
+    <label>Clave de acceso<input id="lClave" type="password" autocomplete="current-password" required></label>
+    <div class="err" id="loginErr" hidden></div>
+    <button type="submit" class="primary" id="btnLogin">Ingresar</button>
+  </form>
+</section>
+
+<div class="wrap" id="app" hidden>
   <header>
     <div>
       <div class="proj" id="projName">Proyecto</div>
       <h1>Control de Cartas</h1>
     </div>
     <div class="actions">
-      <button id="btnConfig" type="button">Ajustes</button>
-      <button id="btnNew" class="primary" type="button">Registrar carta</button>
+      <span class="who">Perfil: <b id="rolName"></b></span>
+      <button id="btnLogout" type="button">Salir</button>
+      <button id="btnConfig" class="solo-admin" type="button">Ajustes</button>
+      <button id="btnNew" class="primary solo-admin" type="button">Registrar carta</button>
     </div>
   </header>
 
@@ -198,7 +219,7 @@ dd{margin:0;overflow-wrap:anywhere}
 <dialog id="dlgDetail" aria-labelledby="detTitle">
   <div class="dlg-head"><h2 id="detTitle" class="mono">Carta</h2><button type="button" data-close>Cerrar</button></div>
   <div class="dlg-body" id="detBody"></div>
-  <div class="dlg-foot"><button type="button" id="btnReply">Registrar respuesta</button><button type="button" class="primary" id="btnEdit">Editar</button></div>
+  <div class="dlg-foot"><button type="button" id="btnReply" class="solo-admin">Registrar respuesta</button><button type="button" class="primary solo-admin" id="btnEdit">Editar</button></div>
 </dialog>
 
 <!-- ajustes -->
@@ -228,9 +249,14 @@ const DEFAULT_CFG = {
 };
 let cfg = {...DEFAULT_CFG};
 let cartas = [];          // [{id, ...data}]
+let rol = null;           // "admin" | "lector"
 async function api(method, path, body){
   const r = await fetch("/api/"+path, {method, headers:{"content-type":"application/json"}, body: body?JSON.stringify(body):undefined});
-  if(!r.ok) throw new Error(`el servidor respondió ${r.status}`);
+  if(r.status===401 && path!=="login"){ mostrarLogin(); throw new Error("la sesión expiró"); }
+  if(!r.ok){
+    const msg = await r.json().then(j=>j.error).catch(()=>null);
+    throw new Error(msg || `el servidor respondió ${r.status}`);
+  }
   return r.status===204 ? null : r.json();
 }
 let editingId = null;
@@ -315,7 +341,7 @@ function render(){
     return true;
   }).sort((a,b)=>(b.c.fecha||"").localeCompare(a.c.fecha||"") || (b.c.numero||"").localeCompare(a.c.numero||""));
   if(!vis.length){
-    $("rows").innerHTML=`<tr><td colspan="11" class="empty">${cartas.length? "Ninguna carta coincide con el filtro." : "Aún no hay cartas. Usa “Registrar carta” para empezar el registro."}</td></tr>`;
+    $("rows").innerHTML=`<tr><td colspan="11" class="empty">${cartas.length? "Ninguna carta coincide con el filtro." : (rol==="admin" ? "Aún no hay cartas. Usa “Registrar carta” para empezar el registro." : "Aún no hay cartas registradas.")}</td></tr>`;
     return;
   }
   $("rows").innerHTML=vis.map(({c,r})=>{
@@ -515,9 +541,31 @@ async function cargar(){
     if(detailId && $("dlgDetail").open) openDetail(detailId);
   }catch(err){ $("status").hidden=false; $("status").textContent="No se pudo conectar con el servidor ("+err.message+"). Revisa tu conexión y recarga la página."; }
 }
-cargar();
-setInterval(()=>{ if(document.visibilityState==="visible" && !document.querySelector("dialog[open]")) cargar(); }, 30000);
-render();
+/* ---------- sesión ---------- */
+function mostrarLogin(){
+  rol=null; cartas=[];
+  document.querySelectorAll("dialog[open]").forEach(d=>d.close());
+  $("app").hidden=true; $("login").hidden=false;
+  $("lClave").value=""; $("lClave").focus();
+}
+function entrar(r){
+  rol=r;
+  document.body.classList.toggle("lector", rol!=="admin");
+  $("rolName").textContent=rol;
+  $("lClave").value=""; $("login").hidden=true; $("app").hidden=false;
+  cargar();
+}
+$("loginForm").addEventListener("submit", async e=>{
+  e.preventDefault();
+  $("loginErr").hidden=true; $("btnLogin").disabled=true;
+  try{ const s=await api("POST","login",{clave:$("lClave").value}); entrar(s.rol); }
+  catch(err){ showErr("loginErr", err.message==="Clave incorrecta" ? "Clave incorrecta." : "No se pudo ingresar: "+err.message+"."); }
+  finally{ $("btnLogin").disabled=false; }
+});
+$("btnLogout").onclick=async()=>{ try{ await api("POST","logout"); }catch{} mostrarLogin(); };
+
+api("GET","sesion").then(s=>entrar(s.rol)).catch(()=>mostrarLogin());
+setInterval(()=>{ if(rol && document.visibilityState==="visible" && !document.querySelector("dialog[open]")) cargar(); }, 30000);
 </script>
 
 </body>
