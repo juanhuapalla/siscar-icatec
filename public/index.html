@@ -228,7 +228,11 @@ const DEFAULT_CFG = {
 };
 let cfg = {...DEFAULT_CFG};
 let cartas = [];          // [{id, ...data}]
-let db = null;
+async function api(method, path, body){
+  const r = await fetch("/api/"+path, {method, headers:{"content-type":"application/json"}, body: body?JSON.stringify(body):undefined});
+  if(!r.ok) throw new Error(`el servidor respondió ${r.status}`);
+  return r.status===204 ? null : r.json();
+}
 let editingId = null;
 let detailId = null;
 
@@ -424,23 +428,24 @@ function openForm(id, preset){
 }
 async function save(e){
   e.preventDefault();
-  if(!db){ showErr("formErr","No hay conexión con el registro. Abre la página con tu sesión iniciada."); return; }
   const d=formData();
   if(d.requiere && !(d.fechaRecepcion||d.fecha)){ showErr("formErr","Falta la fecha de recepción."); return; }
   const prev = editingId ? cartas.find(x=>x.id===editingId) : null;
   if(prev?.ejemplo) d.ejemplo=true;
   $("btnSave").disabled=true;
   try{
-    const ref = editingId ? db.collection("cartas").doc(editingId) : db.collection("cartas").doc();
-    await ref.set(d);
+    const id = editingId || crypto.randomUUID();
+    await api("PUT","cartas/"+id,d);
     // trazabilidad: cerrar la carta a la que responde
     if(d.respondeA){
       const orig=cartas.find(x=>x.id===d.respondeA);
-      if(orig && orig.requiere && (!orig.fechaRespuesta || orig.respuestaId===ref.id)){
-        await db.collection("cartas").doc(orig.id).update({fechaRespuesta:d.fecha, cartaRespuesta:d.numero, respuestaId:ref.id});
+      if(orig && orig.requiere && (!orig.fechaRespuesta || orig.respuestaId===id)){
+        const {id:oid, ...body}=orig;
+        await api("PUT","cartas/"+oid,{...body, fechaRespuesta:d.fecha, cartaRespuesta:d.numero, respuestaId:id});
       }
     }
     $("dlgForm").close();
+    await cargar();
     if(detailId && $("dlgDetail").open) openDetail(detailId);
   }catch(err){ showErr("formErr", errMsg(err)); }
   finally{ $("btnSave").disabled=false; }
@@ -449,13 +454,13 @@ async function del(){
   const b=$("btnDelete");
   if(!b.classList.contains("armed")){ b.classList.add("armed"); b.textContent="Confirmar eliminación"; return; }
   try{
-    await db.collection("cartas").doc(editingId).delete();
+    await api("DELETE","cartas/"+editingId);
     $("dlgForm").close(); if($("dlgDetail").open) $("dlgDetail").close();
+    await cargar();
   }catch(err){ showErr("formErr", errMsg(err)); }
 }
 function showErr(id,msg){ $(id).textContent=msg; $(id).hidden=false; }
 function errMsg(err){
-  if(err?.code==="permission_denied"||err?.code==="not_granted") return "No tienes permiso para modificar este registro. Pide acceso de edición al dueño.";
   return "No se pudo guardar: "+(err?.message||"error desconocido")+". Intenta de nuevo.";
 }
 
@@ -471,7 +476,7 @@ async function saveConfig(e){
   const bad=fer.find(s=>!/^\d{4}-\d{2}-\d{2}$/.test(s));
   if(bad){ showErr("cfgErr",`“${bad}” no tiene el formato AAAA-MM-DD.`); return; }
   const n={proyecto:$("cProyecto").value.trim()||"Proyecto", diasAviso:Number($("cAviso").value)||0, montoDia:Number($("cMonto").value)||0, feriados:fer};
-  try{ await db.doc("config/general").set(n); $("dlgConfig").close(); }
+  try{ await api("PUT","config",n); $("dlgConfig").close(); await cargar(); }
   catch(err){ showErr("cfgErr", errMsg(err)); }
 }
 
@@ -501,18 +506,17 @@ $("detBody").addEventListener("click",e=>{ const g=e.target.closest("[data-goto]
 setInterval(()=>{ if(document.visibilityState==="visible") render(); }, 60*60*1000);
 
 /* ---------- datos ---------- */
-(async()=>{
-  db = window.claude?.use ? await window.claude.use("db") : null;
-  if(!db){ $("status").textContent="No se pudo conectar con el registro. Abre esta página con tu sesión de Claude iniciada."; render(); return; }
-  $("status").hidden=true;
-  db.doc("config/general").onSnapshot(s=>{ cfg = s.exists ? {...DEFAULT_CFG, ...s.data()} : {...DEFAULT_CFG}; render(); if(detailId&&$("dlgDetail").open) openDetail(detailId); },
-    ()=>{});
-  db.collection("cartas").onSnapshot(s=>{
-    cartas=s.docs.map(d=>({id:d.id, ...d.data()}));
+async function cargar(){
+  try{
+    const [c, k] = await Promise.all([api("GET","cartas"), api("GET","config")]);
+    cartas = c; cfg = {...DEFAULT_CFG, ...(k||{})};
+    $("status").hidden=true;
     render();
     if(detailId && $("dlgDetail").open) openDetail(detailId);
-  }, err=>{ $("status").hidden=false; $("status").textContent="Se perdió la conexión con el registro. Recarga la página."; });
-})();
+  }catch(err){ $("status").hidden=false; $("status").textContent="No se pudo conectar con el servidor ("+err.message+"). Revisa tu conexión y recarga la página."; }
+}
+cargar();
+setInterval(()=>{ if(document.visibilityState==="visible" && !document.querySelector("dialog[open]")) cargar(); }, 30000);
 render();
 </script>
 

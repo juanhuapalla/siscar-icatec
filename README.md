@@ -9,5 +9,23 @@ Aplicación de una sola página (`index.html`) para llevar la trazabilidad de la
 - Cálculo de días de penalidad del ejecutor y monto, si se configura la penalidad diaria.
 - Cadena de trazabilidad carta → respuesta.
 
-## Almacenamiento
-Los datos se guardan en la base de datos de un Artifact de Claude (`claude.use("db")`). Abierta fuera de Claude, la página carga pero no puede leer ni guardar cartas.
+## Arquitectura
+- `public/index.html`: la aplicación (Cloudflare Pages).
+- `functions/api/[[path]].js`: API (Pages Functions) sobre Cloudflare D1.
+- `schema.sql`: tablas de D1.
+
+## Despliegue en Cloudflare
+Requiere Node.js y una cuenta de Cloudflare.
+
+```bash
+npm i -g wrangler
+wrangler login
+wrangler d1 create siscar-icatec          # copia el database_id que muestra
+# pega ese id en wrangler.toml (database_id)
+wrangler d1 execute siscar-icatec --remote --file=schema.sql
+wrangler pages deploy
+```
+
+La app queda en `https://siscar-icatec.pages.dev`. Para restringir el acceso, activa Cloudflare Access (Zero Trust) sobre ese dominio.
+
+Prueba local: `wrangler d1 execute siscar-icatec --local --file=schema.sql` y luego `wrangler pages dev`.
